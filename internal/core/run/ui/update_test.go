@@ -246,16 +246,17 @@ func TestMoveFocusedSelectionNavigatesTimelineEntries(t *testing.T) {
 	}
 }
 
-func TestHandleTickRefreshesSidebarWhileJobRunning(t *testing.T) {
+func TestHandleClockTickRefreshesSidebarWhileJobRunning(t *testing.T) {
 	t.Parallel()
 
 	m := newTestUIModelWithSnapshot(t, tea.WindowSizeMsg{Width: 120, Height: 30})
 	m.jobs[0].state = jobRunning
-	m.jobs[0].startedAt = time.Now().Add(-65 * time.Second)
+	m.jobs[0].startedAt = time.Unix(0, 0)
+	m.now = time.Unix(65, 0)
 	m.refreshSidebarContent()
 	before := m.sidebarViewport.View()
 
-	m.handleTick()
+	m.handleClockTick(clockTickMsg{at: time.Unix(66, 0)})
 	after := m.sidebarViewport.View()
 
 	if before == after {
@@ -263,7 +264,7 @@ func TestHandleTickRefreshesSidebarWhileJobRunning(t *testing.T) {
 	}
 }
 
-func TestHandleTickSkipsSidebarRefreshWhenIdleAndClean(t *testing.T) {
+func TestHandleClockTickSkipsSidebarRefreshWhenIdleAndClean(t *testing.T) {
 	m := newTestUIModelWithSnapshot(t, tea.WindowSizeMsg{Width: 120, Height: 30})
 	m.jobs[0].state = jobSuccess
 	m.refreshSidebarContent()
@@ -280,9 +281,24 @@ func TestHandleTickSkipsSidebarRefreshWhenIdleAndClean(t *testing.T) {
 		previous(vp, content)
 	}
 
-	m.handleTick()
+	m.handleClockTick(clockTickMsg{at: time.Unix(66, 0)})
 	if calls != 0 {
 		t.Fatalf("expected idle tick to skip sidebar refresh, got %d SetContent calls", calls)
+	}
+}
+
+func TestHandleSpinnerTickStopsWhenNoActiveJobsRemain(t *testing.T) {
+	t.Parallel()
+
+	m := newTestUIModelWithSnapshot(t, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.spinnerRunning = true
+	m.jobs[0].state = jobSuccess
+
+	if cmd := m.handleSpinnerTick(spinnerTickMsg{at: time.Unix(10, 0)}); cmd != nil {
+		t.Fatalf("expected no follow-up spinner command without active jobs, got %v", cmd)
+	}
+	if m.spinnerRunning {
+		t.Fatal("expected spinner loop to stop without active jobs")
 	}
 }
 
@@ -331,6 +347,40 @@ func TestHandleJobStartedMarksRunningState(t *testing.T) {
 	}
 	if job.startedAt.IsZero() {
 		t.Fatal("expected startedAt to be set")
+	}
+}
+
+func TestHandleJobStartedCreatesPlaceholderForRemoteAttachGap(t *testing.T) {
+	t.Parallel()
+
+	m := newUIModel(0)
+	m.handleJobStarted(jobStartedMsg{
+		Index:           0,
+		Attempt:         1,
+		MaxAttempts:     1,
+		IDE:             "codex",
+		Model:           "gpt-5.4",
+		ReasoningEffort: "medium",
+	})
+
+	if got := len(m.jobs); got != 1 {
+		t.Fatalf("expected placeholder job slice length 1, got %d", got)
+	}
+	if got := m.total; got != 1 {
+		t.Fatalf("expected total 1, got %d", got)
+	}
+	job := &m.jobs[0]
+	if got := job.safeName; got != "job-000" {
+		t.Fatalf("expected placeholder safe name job-000, got %q", got)
+	}
+	if got := job.state; got != jobRunning {
+		t.Fatalf("expected running placeholder job, got %v", got)
+	}
+	if job.startedAt.IsZero() {
+		t.Fatal("expected placeholder startedAt to be set")
+	}
+	if got := job.ide; got != "codex" {
+		t.Fatalf("expected ide codex, got %q", got)
 	}
 }
 
@@ -523,6 +573,48 @@ func TestHandleJobQueuedExpandsTotalForRemoteAttach(t *testing.T) {
 	}
 	if got := len(m.jobs); got != 3 {
 		t.Fatalf("expected job slice to expand to 3, got %d", got)
+	}
+}
+
+func TestHandleJobUpdateCreatesRunningPlaceholderForRemoteAttachGap(t *testing.T) {
+	t.Parallel()
+
+	m := newUIModel(0)
+	snapshot := buildSnapshotWithEntries(t,
+		TranscriptEntry{
+			ID:    "assistant-1",
+			Kind:  transcriptEntryAssistantMessage,
+			Title: "Assistant",
+			Blocks: []model.ContentBlock{
+				mustContentBlockUITest(t, model.TextBlock{Text: "recover from session update"}),
+			},
+		},
+	)
+	snapshot.Session.Status = model.StatusRunning
+
+	m.handleJobUpdate(jobUpdateMsg{
+		Index:    0,
+		Snapshot: snapshot,
+	})
+
+	if got := len(m.jobs); got != 1 {
+		t.Fatalf("expected placeholder job slice length 1, got %d", got)
+	}
+	if got := m.total; got != 1 {
+		t.Fatalf("expected total 1, got %d", got)
+	}
+	job := &m.jobs[0]
+	if got := job.safeName; got != "job-000" {
+		t.Fatalf("expected placeholder safe name job-000, got %q", got)
+	}
+	if got := job.state; got != jobRunning {
+		t.Fatalf("expected running state from session snapshot, got %v", got)
+	}
+	if job.startedAt.IsZero() {
+		t.Fatal("expected placeholder startedAt to be set from session snapshot")
+	}
+	if got := len(job.snapshot.Entries); got != 1 {
+		t.Fatalf("expected one restored transcript entry, got %#v", job.snapshot.Entries)
 	}
 }
 

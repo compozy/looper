@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -31,29 +32,82 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.handleWindowSize(v)
 		return m, nil
-	case tickMsg:
-		return m, m.handleTick()
-	case jobQueuedMsg:
-		return m, m.handleJobQueued(&v)
-	case jobStartedMsg:
-		return m, m.handleJobStarted(v)
-	case jobRetryMsg:
-		return m, m.handleJobRetry(v)
-	case jobFinishedMsg:
-		return m, m.handleJobFinished(v)
-	case jobUpdateMsg:
-		return m, m.handleJobUpdate(v)
-	case usageUpdateMsg:
-		return m, m.handleUsageUpdate(v)
-	case shutdownStatusMsg:
-		return m, m.handleShutdownStatus(v)
-	case jobFailureMsg:
-		m.failures = append(m.failures, v.Failure)
-		return m, nil
+	case clockTickMsg:
+		return m, m.handleClockTick(v)
+	case spinnerTickMsg:
+		return m, m.handleSpinnerTick(v)
+	case dispatchBatchMsg:
+		return m, m.handleDispatchBatch(v)
 	case drainMsg:
 		return m, nil
 	default:
+		if cmd, ok := m.dispatchSingleUIMsg(msg); ok {
+			return m, cmd
+		}
 		return m, nil
+	}
+}
+
+func (m *uiModel) dispatchSingleUIMsg(msg tea.Msg) (tea.Cmd, bool) {
+	switch v := msg.(type) {
+	case jobQueuedMsg:
+		return m.applyUIMsg(v), true
+	case jobStartedMsg:
+		return m.applyUIMsg(v), true
+	case jobRetryMsg:
+		return m.applyUIMsg(v), true
+	case jobFinishedMsg:
+		return m.applyUIMsg(v), true
+	case jobUpdateMsg:
+		return m.applyUIMsg(v), true
+	case usageUpdateMsg:
+		return m.applyUIMsg(v), true
+	case shutdownStatusMsg:
+		return m.applyUIMsg(v), true
+	case jobFailureMsg:
+		return m.applyUIMsg(v), true
+	default:
+		return nil, false
+	}
+}
+
+func (m *uiModel) handleDispatchBatch(v dispatchBatchMsg) tea.Cmd {
+	if len(v.msgs) == 0 {
+		return nil
+	}
+	cmds := make([]tea.Cmd, 0, len(v.msgs))
+	for _, msg := range v.msgs {
+		if cmd := m.applyUIMsg(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *uiModel) applyUIMsg(msg uiMsg) tea.Cmd {
+	switch value := msg.(type) {
+	case jobQueuedMsg:
+		return m.handleJobQueued(&value)
+	case jobStartedMsg:
+		return m.handleJobStarted(value)
+	case jobRetryMsg:
+		return m.handleJobRetry(value)
+	case jobFinishedMsg:
+		return m.handleJobFinished(value)
+	case jobUpdateMsg:
+		return m.handleJobUpdate(value)
+	case usageUpdateMsg:
+		return m.handleUsageUpdate(value)
+	case shutdownStatusMsg:
+		return m.handleShutdownStatus(value)
+	case jobFailureMsg:
+		m.failures = append(m.failures, value.Failure)
+		return nil
+	default:
+		return nil
 	}
 }
 
@@ -113,6 +167,7 @@ func (m *uiModel) handleQuitKey() tea.Cmd {
 
 func (m *uiModel) nextQuitRequest() (uiQuitRequest, bool) {
 	now := time.Now()
+	m.now = now
 	switch m.shutdown.Phase {
 	case shutdownPhaseIdle:
 		m.shutdown = shutdownState{
@@ -327,7 +382,10 @@ func (m *uiModel) handleWindowSize(v tea.WindowSizeMsg) {
 
 func (m *uiModel) refreshViewportContent() {
 	if len(m.jobs) == 0 {
-		setSidebarViewportContent(&m.sidebarViewport, "")
+		if m.sidebarContent != "" {
+			setSidebarViewportContent(&m.sidebarViewport, "")
+			m.sidebarContent = ""
+		}
 		m.sidebarDirty = false
 		return
 	}
@@ -344,11 +402,15 @@ func (m *uiModel) refreshViewportContent() {
 }
 
 func (m *uiModel) refreshSidebarContent() {
-	var items []string
+	items := make([]string, 0, len(m.jobs))
 	for i := range m.jobs {
 		items = append(items, m.renderSidebarItem(&m.jobs[i], i == m.selectedJob))
 	}
-	setSidebarViewportContent(&m.sidebarViewport, strings.Join(items, "\n"))
+	content := strings.Join(items, "\n")
+	if content != m.sidebarContent {
+		setSidebarViewportContent(&m.sidebarViewport, content)
+		m.sidebarContent = content
+	}
 	m.sidebarDirty = false
 
 	lineOffset := m.selectedJob * 3
@@ -397,33 +459,50 @@ func (m *uiModel) selectNextRunningJob() {
 	}
 }
 
-func (m *uiModel) handleTick() tea.Cmd {
-	if m.isRunComplete() {
+func (m *uiModel) handleClockTick(v clockTickMsg) tea.Cmd {
+	if !v.at.IsZero() {
+		m.now = v.at
+	}
+	if m.currentView == uiViewJobs && len(m.jobs) > 0 &&
+		(m.sidebarDirty || m.sidebarNeedsClockRefresh()) {
+		m.refreshSidebarContent()
+	}
+	return m.clockTick()
+}
+
+func (m *uiModel) handleSpinnerTick(v spinnerTickMsg) tea.Cmd {
+	if !m.hasActiveJobs() {
+		m.spinnerRunning = false
 		return nil
+	}
+	if !v.at.IsZero() && v.at.After(m.now) {
+		m.now = v.at
 	}
 	m.frame++
 	if m.currentView == uiViewJobs && len(m.jobs) > 0 &&
 		(m.sidebarDirty || m.sidebarNeedsActiveRefresh()) {
 		m.refreshSidebarContent()
 	}
-	return m.tick()
+	return m.spinnerTick()
+}
+
+func (m *uiModel) ensureSpinnerTick() tea.Cmd {
+	if m.spinnerRunning || !m.hasActiveJobs() {
+		return nil
+	}
+	m.spinnerRunning = true
+	return m.spinnerTick()
 }
 
 func (m *uiModel) handleJobQueued(v *jobQueuedMsg) tea.Cmd {
-	if v.Index >= len(m.jobs) {
-		grow := v.Index - len(m.jobs) + 1
-		m.jobs = append(m.jobs, make([]uiJob, grow)...)
-	}
-	if v.Index+1 > m.total {
-		m.total = v.Index + 1
-	}
-	m.jobs[v.Index] = uiJob{
+	existing, _ := m.ensureJobSlot(v.Index)
+	m.jobs[v.Index] = mergeQueuedJobState(existing, uiJob{
 		codeFile:             v.CodeFile,
 		codeFiles:            v.CodeFiles,
 		issues:               v.Issues,
 		taskTitle:            v.TaskTitle,
 		taskType:             v.TaskType,
-		safeName:             v.SafeName,
+		safeName:             firstNonEmpty(v.SafeName, placeholderJobSafeName(v.Index)),
 		ide:                  v.IDE,
 		model:                v.Model,
 		reasoningEffort:      v.ReasoningEffort,
@@ -435,16 +514,16 @@ func (m *uiModel) handleJobQueued(v *jobQueuedMsg) tea.Cmd {
 		selectedEntry:        -1,
 		expandedEntryIDs:     make(map[string]bool),
 		transcriptFollowTail: true,
-	}
+	})
 	m.sidebarDirty = true
 	m.refreshViewportContent()
-	return m.waitEvent()
+	return nil
 }
 
 func (m *uiModel) handleJobStarted(v jobStartedMsg) tea.Cmd {
-	if v.Index < len(m.jobs) {
+	startedAt := time.Now()
+	if job, _ := m.ensureJobSlot(v.Index); job != nil {
 		m.persistSelectedViewportState()
-		job := &m.jobs[v.Index]
 		job.state = jobRunning
 		job.attempt = max(v.Attempt, 1)
 		job.maxAttempts = max(v.MaxAttempts, job.attempt)
@@ -460,36 +539,42 @@ func (m *uiModel) handleJobStarted(v jobStartedMsg) tea.Cmd {
 		job.retrying = false
 		job.retryReason = ""
 		if job.startedAt.IsZero() {
-			job.startedAt = time.Now()
+			job.startedAt = startedAt
 			job.duration = 0
+		}
+		if startedAt.After(m.now) {
+			m.now = startedAt
 		}
 		m.selectedJob = v.Index
 		m.sidebarDirty = true
 	}
 	m.refreshViewportContent()
-	return m.waitEvent()
+	return m.ensureSpinnerTick()
 }
 
 func (m *uiModel) handleJobRetry(v jobRetryMsg) tea.Cmd {
-	if v.Index < len(m.jobs) {
+	retryAt := time.Now()
+	if job, _ := m.ensureJobSlot(v.Index); job != nil {
 		m.persistSelectedViewportState()
-		job := &m.jobs[v.Index]
 		job.state = jobRetrying
 		job.attempt = max(v.Attempt, 1)
 		job.maxAttempts = max(v.MaxAttempts, job.attempt)
 		job.retrying = true
 		job.retryReason = v.Reason
+		if retryAt.After(m.now) {
+			m.now = retryAt
+		}
 		m.selectedJob = v.Index
 		m.sidebarDirty = true
 	}
 	m.refreshViewportContent()
-	return m.waitEvent()
+	return nil
 }
 
 func (m *uiModel) handleJobFinished(v jobFinishedMsg) tea.Cmd {
-	if v.Index < len(m.jobs) {
+	finishedAt := time.Now()
+	if job, _ := m.ensureJobSlot(v.Index); job != nil {
 		m.persistSelectedViewportState()
-		job := &m.jobs[v.Index]
 		job.retrying = false
 		job.retryReason = ""
 		if v.Success {
@@ -501,8 +586,11 @@ func (m *uiModel) handleJobFinished(v jobFinishedMsg) tea.Cmd {
 			m.failed++
 		}
 		if !job.startedAt.IsZero() {
-			job.completedAt = time.Now()
+			job.completedAt = finishedAt
 			job.duration = job.completedAt.Sub(job.startedAt)
+		}
+		if finishedAt.After(m.now) {
+			m.now = finishedAt
 		}
 		m.selectNextRunningJob()
 		m.sidebarDirty = true
@@ -514,14 +602,30 @@ func (m *uiModel) handleJobFinished(v jobFinishedMsg) tea.Cmd {
 		m.showSummaryView()
 	}
 	m.refreshViewportContent()
-	return m.waitEvent()
+	if m.hasActiveJobs() {
+		return m.ensureSpinnerTick()
+	}
+	m.spinnerRunning = false
+	return nil
 }
 
 func (m *uiModel) handleJobUpdate(v jobUpdateMsg) tea.Cmd {
-	if v.Index < len(m.jobs) {
-		job := &m.jobs[v.Index]
+	updatedAt := time.Now()
+	if job, created := m.ensureJobSlot(v.Index); job != nil {
 		wasAtEnd := job.selectedEntry >= len(job.snapshot.Entries)-1
 		job.snapshot = v.Snapshot
+		if (created || job.state == jobPending) && v.Snapshot.Session.Status == model.StatusRunning {
+			job.state = jobRunning
+			if job.startedAt.IsZero() {
+				job.startedAt = updatedAt
+				job.duration = 0
+			}
+			if updatedAt.After(m.now) {
+				m.now = updatedAt
+			}
+			m.selectedJob = v.Index
+			m.sidebarDirty = true
+		}
 		job.timelineCacheValid = false
 		if m.applyDefaultExpandedEntries(job) {
 			job.expansionRevision++
@@ -533,26 +637,32 @@ func (m *uiModel) handleJobUpdate(v jobUpdateMsg) tea.Cmd {
 		}
 	}
 	m.refreshViewportContent()
-	return m.waitEvent()
+	return m.ensureSpinnerTick()
 }
 
 func (m *uiModel) handleUsageUpdate(v usageUpdateMsg) tea.Cmd {
-	if v.Index < len(m.jobs) {
-		if m.jobs[v.Index].tokenUsage == nil {
-			m.jobs[v.Index].tokenUsage = &model.Usage{}
+	if job, created := m.ensureJobSlot(v.Index); job != nil {
+		if job.tokenUsage == nil {
+			job.tokenUsage = &model.Usage{}
 		}
-		m.jobs[v.Index].tokenUsage.Add(v.Usage)
+		job.tokenUsage.Add(v.Usage)
+		if created {
+			m.sidebarDirty = true
+		}
 	}
 	if m.aggregateUsage != nil {
 		m.aggregateUsage.Add(v.Usage)
 	}
 	m.refreshViewportContent()
-	return m.waitEvent()
+	return nil
 }
 
 func (m *uiModel) handleShutdownStatus(v shutdownStatusMsg) tea.Cmd {
 	m.shutdown = v.State
-	return m.waitEvent()
+	if !v.State.RequestedAt.IsZero() && v.State.RequestedAt.After(m.now) {
+		m.now = v.State.RequestedAt
+	}
+	return nil
 }
 
 func (m *uiModel) sidebarNeedsActiveRefresh() bool {
@@ -562,6 +672,145 @@ func (m *uiModel) sidebarNeedsActiveRefresh() bool {
 		}
 	}
 	return false
+}
+
+func (m *uiModel) sidebarNeedsClockRefresh() bool {
+	for i := range m.jobs {
+		if m.jobs[i].state == jobRunning {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *uiModel) hasActiveJobs() bool {
+	for i := range m.jobs {
+		switch m.jobs[i].state {
+		case jobRunning, jobRetrying:
+			return true
+		}
+	}
+	return false
+}
+
+func (m *uiModel) ensureJobSlot(index int) (*uiJob, bool) {
+	if index < 0 {
+		return nil, false
+	}
+
+	created := false
+	if index >= len(m.jobs) {
+		start := len(m.jobs)
+		m.jobs = append(m.jobs, make([]uiJob, index-len(m.jobs)+1)...)
+		for i := start; i <= index; i++ {
+			m.jobs[i] = newPlaceholderUIJob(i)
+		}
+		created = true
+	}
+	if index+1 > m.total {
+		m.total = index + 1
+	}
+
+	job := &m.jobs[index]
+	if strings.TrimSpace(job.safeName) == "" {
+		job.safeName = placeholderJobSafeName(index)
+		created = true
+	}
+	if job.expandedEntryIDs == nil {
+		job.expandedEntryIDs = make(map[string]bool)
+	}
+	if !job.transcriptFollowTail && len(job.snapshot.Entries) == 0 && job.selectedEntry == 0 &&
+		job.startedAt.IsZero() && job.completedAt.IsZero() {
+		job.selectedEntry = -1
+		job.transcriptFollowTail = true
+	}
+	return job, created
+}
+
+func newPlaceholderUIJob(index int) uiJob {
+	return uiJob{
+		safeName:             placeholderJobSafeName(index),
+		state:                jobPending,
+		selectedEntry:        -1,
+		expandedEntryIDs:     make(map[string]bool),
+		transcriptFollowTail: true,
+	}
+}
+
+func placeholderJobSafeName(index int) string {
+	return fmt.Sprintf("job-%03d", index)
+}
+
+func mergeQueuedJobState(existing *uiJob, queued uiJob) uiJob {
+	if existing == nil {
+		return queued
+	}
+	mergeQueuedSnapshotState(existing, &queued)
+	mergeQueuedTranscriptState(existing, &queued)
+	mergeQueuedRuntimeState(existing, &queued)
+	return queued
+}
+
+func mergeQueuedSnapshotState(existing *uiJob, queued *uiJob) {
+	if existing == nil || queued == nil {
+		return
+	}
+	if len(existing.snapshot.Entries) > 0 || existing.snapshot.Session.Status != "" ||
+		len(existing.snapshot.Plan.Entries) > 0 {
+		queued.snapshot = existing.snapshot
+	}
+	if existing.selectedEntry >= 0 {
+		queued.selectedEntry = existing.selectedEntry
+	}
+	if len(existing.expandedEntryIDs) > 0 {
+		queued.expandedEntryIDs = existing.expandedEntryIDs
+	}
+	if existing.expansionRevision > 0 {
+		queued.expansionRevision = existing.expansionRevision
+	}
+	if existing.tokenUsage != nil {
+		queued.tokenUsage = existing.tokenUsage
+	}
+}
+
+func mergeQueuedTranscriptState(existing *uiJob, queued *uiJob) {
+	if existing == nil || queued == nil {
+		return
+	}
+	if existing.transcriptYOffset != 0 {
+		queued.transcriptYOffset = existing.transcriptYOffset
+	}
+	if existing.transcriptXOffset != 0 {
+		queued.transcriptXOffset = existing.transcriptXOffset
+	}
+}
+
+func mergeQueuedRuntimeState(existing *uiJob, queued *uiJob) {
+	if existing == nil || queued == nil {
+		return
+	}
+	if existing.startedAt != (time.Time{}) {
+		queued.startedAt = existing.startedAt
+	}
+	if existing.completedAt != (time.Time{}) {
+		queued.completedAt = existing.completedAt
+	}
+	if existing.duration != 0 {
+		queued.duration = existing.duration
+	}
+	if existing.attempt > 0 {
+		queued.attempt = existing.attempt
+	}
+	if existing.maxAttempts > 0 {
+		queued.maxAttempts = existing.maxAttempts
+	}
+	if existing.retrying {
+		queued.retrying = true
+		queued.retryReason = existing.retryReason
+	}
+	if existing.state != jobPending {
+		queued.state = existing.state
+	}
 }
 
 func (m *uiModel) syncSelectedEntry(job *uiJob) {
