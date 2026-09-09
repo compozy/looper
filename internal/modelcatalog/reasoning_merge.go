@@ -1,6 +1,8 @@
 package modelcatalog
 
-import "slices"
+import (
+	"slices"
+)
 
 func applyEffectiveReasoningProfile(model *Model, rows []ModelRow, opts MergeOptions) {
 	profileRow, hasProfile := explicitReasoningProfileRow(rows)
@@ -14,7 +16,7 @@ func applyEffectiveReasoningProfile(model *Model, rows []ModelRow, opts MergeOpt
 			value := true
 			model.SupportsReasoning = &value
 		}
-		model.ReasoningSource = reasoningSourceForKind(profileRow.SourceKind)
+		model.ReasoningSource = reasoningSourceForRow(profileRow)
 	}
 	if defaultEffort := explicitDefaultReasoningEffort(rows); defaultEffort != nil &&
 		slices.Contains(model.ReasoningEfforts, *defaultEffort) {
@@ -53,11 +55,16 @@ func explicitDefaultReasoningEffort(rows []ModelRow) *ReasoningEffort {
 	return nil
 }
 
-func reasoningSourceForKind(kind SourceKind) ReasoningSource {
-	if kind == SourceKindACPSession {
+func reasoningSourceForRow(row ModelRow) ReasoningSource {
+	if row.SourceKind == SourceKindACPSession ||
+		(row.SourceKind == SourceKindProviderLive && hasACPReasoningOption(row.ConfigOptions)) {
 		return ReasoningSourceACP
 	}
 	return ReasoningSourceCatalog
+}
+
+func hasACPReasoningOption(options []ModelOptionDescriptor) bool {
+	return slices.ContainsFunc(options, isReasoningOptionDescriptor)
 }
 
 func cloneBoolPtr(value *bool) *bool {

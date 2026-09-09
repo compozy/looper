@@ -12,8 +12,10 @@ function model(
   }
 ): ProviderModelPayload {
   return {
+    default: false,
     availability_state: "available_live",
     available: true,
+    startable: true,
     curated: true,
     deprecated: false,
     featured: false,

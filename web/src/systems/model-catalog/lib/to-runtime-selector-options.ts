@@ -16,6 +16,25 @@ export function providerNeedsAuth(state: string | undefined | null): boolean {
   return NEEDS_AUTH_STATES.has((state ?? "").trim());
 }
 
+/**
+ * Why the daemon says a row cannot start a session. The badge stays short enough for the
+ * row; the detail carries the explanation into the tooltip.
+ */
+const START_BLOCKED_COPY: Record<string, { reason: string; detail: string }> = {
+  live_discovery_unavailable: {
+    reason: "Not listed",
+    detail: "The provider did not list its models",
+  },
+  live_discovery_stale: {
+    reason: "Out of date",
+    detail: "The provider's model list is out of date",
+  },
+  not_advertised: {
+    reason: "Not offered",
+    detail: "The provider does not offer this model",
+  },
+};
+
 function toAvailability(state: string, available: boolean | null | undefined): RuntimeAvailability {
   switch (state) {
     case "available_live":
@@ -26,7 +45,7 @@ function toAvailability(state: string, available: boolean | null | undefined): R
     case "unavailable_stale":
       return "unavailable";
     default:
-      return available === false ? "unavailable" : "live";
+      return available === true ? "live" : "unavailable";
   }
 }
 
@@ -135,10 +154,19 @@ export function toRuntimeModelOptions(
     const key = runtimeModelKey(model.provider_id, id);
     if (seen.has(key)) continue;
     seen.add(key);
-    const availability = needsAuth
-      ? "unavailable"
-      : toAvailability(model.availability_state, model.available);
+    // The daemon owns whether a row can start a session: an offline row for a provider
+    // whose ids only resolve through live discovery is not selectable, however its
+    // availability state reads. Without that verdict the picker would offer models the
+    // runtime then refuses.
+    const blocked = model.startable === false;
+    const availability =
+      needsAuth || blocked
+        ? "unavailable"
+        : toAvailability(model.availability_state, model.available);
     const disabled = needsAuth || availability === "unavailable";
+    const blockedCopy = blocked
+      ? START_BLOCKED_COPY[(model.start_blocked_reason ?? "").trim()]
+      : undefined;
     const configurations = normalizeConfigurations(model.configurations);
     const acpOptions = normalizeConfigOptions(model.config_options);
     // Only canonical efforts survive, and the default is accepted ONLY when it is
@@ -154,6 +182,7 @@ export function toRuntimeModelOptions(
       id,
       provider: model.provider_id,
       name: model.display_name?.trim() || id,
+      default: model.default,
       context_window: model.context_window ?? null,
       cost_input: model.cost?.input_per_million ?? null,
       cost_output: model.cost?.output_per_million ?? null,
@@ -172,7 +201,12 @@ export function toRuntimeModelOptions(
       featured: model.featured,
       release_date: model.release_date,
       disabled,
-      disabled_reason: needsAuth ? "Sign in" : disabled ? "Unavailable" : undefined,
+      disabled_reason: needsAuth
+        ? "Sign in"
+        : disabled
+          ? (blockedCopy?.reason ?? "Unavailable")
+          : undefined,
+      ...(!needsAuth && blockedCopy ? { disabled_detail: blockedCopy.detail } : {}),
     });
   }
   return result;

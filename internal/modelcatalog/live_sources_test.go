@@ -110,18 +110,31 @@ func TestLiveProviderSources(t *testing.T) {
 		provider := compozyconfig.BuiltinProviders()["claude"]
 		provider.Command = "claude-acp"
 		provider.AuthMode = compozyconfig.ProviderAuthModeNone
-		probe := &fakeACPModelProbe{options: []acp.SessionConfigOption{{
-			ID:       "model",
-			Category: "model",
-			Kind:     acp.SessionConfigOptionKindSelect,
-			Values: []acp.SessionConfigOptionValue{
-				{Value: "default", Label: "Default"},
-				{Value: "sonnet", Label: "Sonnet"},
-				{Value: "opus[1m]", Label: "Opus 5 1M"},
-				{Value: "haiku", Label: "Haiku"},
-				{Value: "claude-future-6", Label: "Claude Future 6"},
+		probe := &fakeACPModelProbe{options: []acp.SessionConfigOption{
+			{
+				ID:             "model",
+				Category:       "model",
+				Kind:           acp.SessionConfigOptionKindSelect,
+				CurrentValueID: "default",
+				Values: []acp.SessionConfigOptionValue{
+					{Value: "default", Label: "Default"},
+					{Value: "sonnet", Label: "Sonnet"},
+					{Value: "opus[1m]", Label: "Opus 5 1M"},
+					{Value: "haiku", Label: "Haiku"},
+					{Value: "claude-future-6", Label: "Claude Future 6"},
+				},
 			},
-		}}}
+			{
+				ID:             "thinking_level",
+				Category:       "thought_level",
+				Kind:           acp.SessionConfigOptionKindSelect,
+				CurrentValueID: "high",
+				Values: []acp.SessionConfigOptionValue{
+					{Value: "low", Label: "Low"},
+					{Value: "high", Label: "High"},
+				},
+			},
+		}}
 		source := newLiveSourceForTest(t, "claude", provider, &LiveProviderSourcesConfig{
 			BaseEnv:  []string{"PATH=/bin"},
 			ACPProbe: probe,
@@ -146,6 +159,28 @@ func TestLiveProviderSources(t *testing.T) {
 		if sonnet.DisplayName != "Claude Sonnet 5" {
 			t.Fatalf("Claude Sonnet display name = %q, want canonical seed label", sonnet.DisplayName)
 		}
+		if got, want := sonnet.ReasoningEfforts, []ReasoningEffort{
+			ReasoningEffortLow,
+			ReasoningEffortHigh,
+		}; !slices.Equal(
+			got,
+			want,
+		) {
+			t.Fatalf("Claude Sonnet reasoning efforts = %#v, want %#v", got, want)
+		}
+		if sonnet.DefaultReasoningEffort == nil || *sonnet.DefaultReasoningEffort != ReasoningEffortHigh {
+			t.Fatalf("Claude Sonnet default reasoning effort = %v, want high", sonnet.DefaultReasoningEffort)
+		}
+		if len(sonnet.ConfigOptions) != 2 {
+			t.Fatalf("Claude Sonnet config options = %#v, want model and reasoning descriptors", sonnet.ConfigOptions)
+		}
+		merged := requireSingleModel(t, MergeRows(
+			[]ModelRow{sonnet},
+			MergeOptions{ReasoningApply: map[string]bool{"claude": true}},
+		))
+		if merged.ReasoningSource != ReasoningSourceACP {
+			t.Fatalf("Claude Sonnet reasoning source = %q, want acp", merged.ReasoningSource)
+		}
 		assertClaudeTransportBinding(t, sonnet, "default")
 		assertClaudeTransportBinding(t, sonnet, "sonnet")
 
@@ -153,9 +188,60 @@ func TestLiveProviderSources(t *testing.T) {
 		if opus.DisplayName != "Opus 5 1M" {
 			t.Fatalf("Claude Opus display name = %q, want live label", opus.DisplayName)
 		}
+		// Opus was not the model active during discovery: it must keep the catalog's own
+		// reasoning profile rather than inherit Sonnet's ACP-verified effort levels.
+		if opus.SupportsReasoning != nil || len(opus.ReasoningEfforts) > 0 {
+			t.Fatalf(
+				"Claude Opus SupportsReasoning=%v ReasoningEfforts=%#v, want untouched (not the active probe model)",
+				opus.SupportsReasoning,
+				opus.ReasoningEfforts,
+			)
+		}
+		if len(opus.ConfigOptions) != 1 || opus.ConfigOptions[0].ID != "model" {
+			t.Fatalf("Claude Opus config options = %#v, want only the model descriptor", opus.ConfigOptions)
+		}
 		assertClaudeTransportBinding(t, opus, "opus[1m]")
 		future := requireModelRow(t, rows, "claude-future-6")
 		assertClaudeTransportBinding(t, future, "claude-future-6")
+	})
+
+	t.Run("Should never use Claude Code's own default-alias label as a model's display name", func(t *testing.T) {
+		t.Parallel()
+
+		provider := compozyconfig.BuiltinProviders()["claude"]
+		provider.Command = "claude-acp"
+		provider.AuthMode = compozyconfig.ProviderAuthModeNone
+		provider.Models.Default = "claude-opus-5"
+		probe := &fakeACPModelProbe{options: []acp.SessionConfigOption{
+			{
+				ID:             "model",
+				Category:       "model",
+				Kind:           acp.SessionConfigOptionKindSelect,
+				CurrentValueID: "default",
+				Values: []acp.SessionConfigOptionValue{
+					// Claude Code's own label for its default alias describes ITS picker,
+					// not CompozyOS's — it must never leak into the seeded display name.
+					{Value: "default", Label: "Default (recommended)"},
+					{Value: "sonnet", Label: "Sonnet"},
+				},
+			},
+		}}
+		source := newLiveSourceForTest(t, "claude", provider, &LiveProviderSourcesConfig{
+			BaseEnv:  []string{"PATH=/bin"},
+			ACPProbe: probe,
+		})
+
+		rows, err := source.ListModels(testutil.Context(t), ListOptions{
+			ProviderID: "claude",
+			Now:        testTime(0),
+		})
+		if err != nil {
+			t.Fatalf("ListModels(Claude ACP) error = %v", err)
+		}
+		opus := requireModelRow(t, rows, "claude-opus-5")
+		if opus.DisplayName != "Claude Opus 5" {
+			t.Fatalf("Claude Opus display name = %q, want the canonical seed label", opus.DisplayName)
+		}
 	})
 
 	t.Run(

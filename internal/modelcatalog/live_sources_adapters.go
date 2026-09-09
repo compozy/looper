@@ -32,17 +32,25 @@ const (
 )
 
 type liveProviderAdapter struct {
-	defaultKind       liveDiscoveryKind
-	defaultEndpoint   string
-	defaultCommand    string
-	bootstrapOnList   bool
-	commandOnly       bool
-	parseCommandRows  liveCommandRowsParser
-	parseACPModelRows liveACPModelRowsParser
-	authScheme        liveAuthScheme
-	authRequired      bool
-	credentialEnvKeys []string
-	headers           map[string]string
+	defaultKind     liveDiscoveryKind
+	defaultEndpoint string
+	defaultCommand  string
+	bootstrapOnList bool
+	commandOnly     bool
+	// requiresLiveBinding marks providers whose models carry a CompozyOS logical id
+	// that only reaches the agent through a transport id discovered at runtime
+	// (implies requiresLiveConfirmation).
+	requiresLiveBinding bool
+	// requiresLiveConfirmation marks providers whose offline metadata is a placeholder
+	// that must be confirmed by a fresh live (or extension) source before a model counts
+	// as startable, even though the model id itself needs no separate transport binding.
+	requiresLiveConfirmation bool
+	parseCommandRows         liveCommandRowsParser
+	parseACPModelRows        liveACPModelRowsParser
+	authScheme               liveAuthScheme
+	authRequired             bool
+	credentialEnvKeys        []string
+	headers                  map[string]string
 }
 
 type liveCommandRowsParser func(string, string, time.Time) ([]ModelRow, error)
@@ -61,13 +69,33 @@ type liveDiscoveryTarget struct {
 	timeout  time.Duration
 }
 
+// ProviderRequiresLiveBinding reports whether the provider's logical model ids only
+// resolve through a transport binding discovered from the live agent (Claude, Cursor).
+// A row lacking that binding cannot start even once a live source confirms it.
+func ProviderRequiresLiveBinding(providerID string) bool {
+	adapter, ok := liveProviderAdapters[strings.TrimSpace(providerID)]
+	return ok && adapter.requiresLiveBinding
+}
+
+// ProviderRequiresLiveConfirmation reports whether the provider's offline (builtin,
+// config, or models_dev) rows are placeholders that must be confirmed by a fresh live
+// or extension source before any of them count as startable. This is the superset of
+// ProviderRequiresLiveBinding: every binding-dependent provider also requires
+// confirmation, but a native-CLI ACP provider whose model id already IS its transport
+// id (Codex, OpenCode, Hermes, Pi) requires confirmation without needing a binding.
+func ProviderRequiresLiveConfirmation(providerID string) bool {
+	adapter, ok := liveProviderAdapters[strings.TrimSpace(providerID)]
+	return ok && (adapter.requiresLiveBinding || adapter.requiresLiveConfirmation)
+}
+
 var liveProviderAdapters = map[string]liveProviderAdapter{
 	liveSourcesCodexKey: {
-		defaultKind:       liveDiscoveryACP,
-		bootstrapOnList:   true,
-		authScheme:        liveAuthBearer,
-		authRequired:      true,
-		credentialEnvKeys: []string{liveSourcesOpenAIEnvName},
+		defaultKind:              liveDiscoveryACP,
+		bootstrapOnList:          true,
+		requiresLiveConfirmation: true,
+		authScheme:               liveAuthBearer,
+		authRequired:             true,
+		credentialEnvKeys:        []string{liveSourcesOpenAIEnvName},
 	},
 	liveSourcesOpenaiKey: {
 		defaultKind:       liveDiscoveryHTTP,
@@ -77,13 +105,14 @@ var liveProviderAdapters = map[string]liveProviderAdapter{
 		credentialEnvKeys: []string{liveSourcesOpenAIEnvName},
 	},
 	liveSourcesClaudeKey: {
-		defaultKind:       liveDiscoveryACP,
-		bootstrapOnList:   true,
-		parseACPModelRows: parseClaudeModelRows,
-		authScheme:        liveAuthAnthropic,
-		authRequired:      true,
-		credentialEnvKeys: []string{"ANTHROPIC_API_KEY"},
-		headers:           map[string]string{"anthropic-version": "2023-06-01"},
+		defaultKind:         liveDiscoveryACP,
+		bootstrapOnList:     true,
+		requiresLiveBinding: true,
+		parseACPModelRows:   parseClaudeModelRows,
+		authScheme:          liveAuthAnthropic,
+		authRequired:        true,
+		credentialEnvKeys:   []string{"ANTHROPIC_API_KEY"},
+		headers:             map[string]string{"anthropic-version": "2023-06-01"},
 	},
 	"anthropic": {
 		defaultKind:       liveDiscoveryHTTP,
@@ -119,25 +148,29 @@ var liveProviderAdapters = map[string]liveProviderAdapter{
 		defaultEndpoint: "http://localhost:11434/api/tags",
 	},
 	liveSourcesOpencodeKey: {
-		defaultKind:    liveDiscoveryCommand,
-		defaultCommand: "opencode models",
+		defaultKind:              liveDiscoveryCommand,
+		defaultCommand:           "opencode models",
+		requiresLiveConfirmation: true,
 	},
 	liveSourcesCursorKey: {
-		defaultKind:      liveDiscoveryCommand,
-		defaultCommand:   cursorModelsCommand,
-		bootstrapOnList:  true,
-		parseCommandRows: parseCursorModelRows,
-		commandOnly:      true,
+		defaultKind:         liveDiscoveryCommand,
+		defaultCommand:      cursorModelsCommand,
+		bootstrapOnList:     true,
+		requiresLiveBinding: true,
+		parseCommandRows:    parseCursorModelRows,
+		commandOnly:         true,
 	},
 	"openclaw": {
 		defaultKind: liveDiscoveryNone,
 	},
 	liveSourcesHermesKey: {
-		defaultKind:     liveDiscoveryACP,
-		bootstrapOnList: true,
+		defaultKind:              liveDiscoveryACP,
+		bootstrapOnList:          true,
+		requiresLiveConfirmation: true,
 	},
 	"pi": {
-		defaultKind: liveDiscoveryNone,
+		defaultKind:              liveDiscoveryNone,
+		requiresLiveConfirmation: true,
 	},
 }
 

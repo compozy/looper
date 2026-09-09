@@ -138,6 +138,8 @@ export interface RuntimeModelOption {
   id: string;
   provider: string;
   name: string;
+  /** The effective provider default resolved by Compozy. */
+  default?: boolean;
   context_window?: number | null;
   cost_input?: number | null;
   cost_output?: number | null;
@@ -161,6 +163,8 @@ export interface RuntimeModelOption {
   release_date?: string;
   disabled?: boolean;
   disabled_reason?: string;
+  /** Full explanation behind `disabled_reason`, surfaced as the badge tooltip. */
+  disabled_detail?: string;
 }
 
 export type RuntimeReasoningMode = "levels" | "supported-nolevels" | "none" | "no-model";

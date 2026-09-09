@@ -109514,6 +109514,9 @@
                           "curated": {
                             "type": "boolean"
                           },
+                          "default": {
+                            "type": "boolean"
+                          },
                           "default_reasoning_effort": {
                             "enum": [
                               "none",
@@ -109621,6 +109624,12 @@
                           "stale": {
                             "type": "boolean"
                           },
+                          "start_blocked_reason": {
+                            "type": "string"
+                          },
+                          "startable": {
+                            "type": "boolean"
+                          },
                           "supports_reasoning": {
                             "nullable": true,
                             "type": "boolean"
@@ -109634,13 +109643,15 @@
                           "availability_state",
                           "available",
                           "curated",
+                          "default",
                           "deprecated",
                           "featured",
                           "hidden",
                           "model_id",
                           "provider_id",
                           "sources",
-                          "stale"
+                          "stale",
+                          "startable"
                         ],
                         "type": "object"
                       },
@@ -110565,6 +110576,9 @@
                           "curated": {
                             "type": "boolean"
                           },
+                          "default": {
+                            "type": "boolean"
+                          },
                           "default_reasoning_effort": {
                             "enum": [
                               "none",
@@ -110672,6 +110686,12 @@
                           "stale": {
                             "type": "boolean"
                           },
+                          "start_blocked_reason": {
+                            "type": "string"
+                          },
+                          "startable": {
+                            "type": "boolean"
+                          },
                           "supports_reasoning": {
                             "nullable": true,
                             "type": "boolean"
@@ -110685,13 +110705,15 @@
                           "availability_state",
                           "available",
                           "curated",
+                          "default",
                           "deprecated",
                           "featured",
                           "hidden",
                           "model_id",
                           "provider_id",
                           "sources",
-                          "stale"
+                          "stale",
+                          "startable"
                         ],
                         "type": "object"
                       },
@@ -111414,6 +111436,9 @@
                         "curated": {
                           "type": "boolean"
                         },
+                        "default": {
+                          "type": "boolean"
+                        },
                         "default_reasoning_effort": {
                           "enum": [
                             "none",
@@ -111521,6 +111546,12 @@
                         "stale": {
                           "type": "boolean"
                         },
+                        "start_blocked_reason": {
+                          "type": "string"
+                        },
+                        "startable": {
+                          "type": "boolean"
+                        },
                         "supports_reasoning": {
                           "nullable": true,
                           "type": "boolean"
@@ -111534,13 +111565,15 @@
                         "availability_state",
                         "available",
                         "curated",
+                        "default",
                         "deprecated",
                         "featured",
                         "hidden",
                         "model_id",
                         "provider_id",
                         "sources",
-                        "stale"
+                        "stale",
+                        "startable"
                       ],
                       "type": "object"
                     }
@@ -119428,6 +119461,9 @@
                                 },
                                 "type": "object"
                               },
+                              "default": {
+                                "type": "boolean"
+                              },
                               "default_reasoning_effort": {
                                 "enum": [
                                   "none",
@@ -119502,6 +119538,7 @@
                             "required": [
                               "availability_state",
                               "available",
+                              "default",
                               "model_id",
                               "provider_id",
                               "sources",

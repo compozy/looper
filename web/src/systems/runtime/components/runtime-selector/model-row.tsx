@@ -36,8 +36,9 @@ export interface ModelRowProps {
 
 /**
  * One `role="option"` in the models listbox — a compact 28px line (design ref:
- * runtime-selector-variations.html, variation A): name, a faint brain glyph
- * when the model reasons, and a favorite star on the trailing edge. A listbox
+ * runtime-selector-variations.html, variation A): name, the Compozy default
+ * marker when applicable, a faint brain glyph when the model reasons, and a
+ * favorite star on the trailing edge. A listbox
  * option MUST NOT wrap a focusable control, so the star is `aria-hidden` and
  * never enters the Tab order: pointer clicks are intercepted before row
  * selection, while keyboard/AT users favorite the active row with Alt+F
@@ -111,6 +112,9 @@ export function ModelRow({
           {model.name}
         </span>
         <span className="sr-only">from {providerName}</span>
+        {model.default ? (
+          <span className="shrink-0 text-badge font-medium text-subtle">Default</span>
+        ) : null}
         {reasons ? (
           <span
             data-reasoning-indicator="true"
@@ -125,7 +129,10 @@ export function ModelRow({
       </span>
       <span className="flex shrink-0 items-center gap-1.5">
         {disabled ? (
-          <span className="text-badge font-medium whitespace-nowrap text-warning">
+          <span
+            className="text-badge font-medium whitespace-nowrap text-warning"
+            {...(model.disabled_detail ? { title: model.disabled_detail } : {})}
+          >
             {model.disabled_reason ?? "Unavailable"}
           </span>
         ) : null}

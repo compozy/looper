@@ -9,11 +9,16 @@ import type { ProviderModelPayload } from "../types";
 // Canonical suite: derive-active-session-options unit suite.
 
 const visibleCatalogFlags = {
+  default: false,
+  startable: true,
   curated: true,
   deprecated: false,
   featured: false,
   hidden: false,
-} satisfies Pick<ProviderModelPayload, "curated" | "deprecated" | "featured" | "hidden">;
+} satisfies Pick<
+  ProviderModelPayload,
+  "default" | "startable" | "curated" | "deprecated" | "featured" | "hidden"
+>;
 
 const codexCatalog: ProviderModelPayload[] = [
   {

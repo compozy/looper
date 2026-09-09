@@ -336,6 +336,25 @@ func TestMergeRows(t *testing.T) {
 		}
 	})
 
+	t.Run("Should identify only the effective provider default model", func(t *testing.T) {
+		t.Parallel()
+
+		models := MergeRows([]ModelRow{
+			testRow(SourceIDBuiltin, SourceKindBuiltin, PriorityBuiltin, "codex", "gpt-a", testTime(0), nil),
+			testRow(SourceIDBuiltin, SourceKindBuiltin, PriorityBuiltin, "codex", "gpt-b", testTime(0), nil),
+		}, MergeOptions{DefaultModels: map[string]string{"codex": "gpt-b"}})
+
+		if got, want := modelKeys(models), []string{"codex/gpt-a", "codex/gpt-b"}; !slices.Equal(got, want) {
+			t.Fatalf("model keys = %#v, want %#v", got, want)
+		}
+		if models[0].Default {
+			t.Fatal("gpt-a Default = true, want false")
+		}
+		if !models[1].Default {
+			t.Fatal("gpt-b Default = false, want true")
+		}
+	})
+
 	t.Run("Should preserve support without fabricating selectable efforts", func(t *testing.T) {
 		t.Parallel()
 
@@ -668,6 +687,233 @@ func TestMergeRows(t *testing.T) {
 				model.ReasoningEfforts,
 				model.DefaultReasoningEffort,
 			)
+		}
+	})
+}
+
+func TestModelStartability(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Should block a live-binding provider model that has no live source", func(t *testing.T) {
+		t.Parallel()
+
+		models := mergeTestRows([]ModelRow{
+			testRow("builtin", SourceKindBuiltin, PriorityBuiltin, "claude", "claude-sonnet-5", testTime(0), nil),
+		})
+
+		model := requireSingleModel(t, models)
+		startable, reason := ModelStartability(model)
+		if startable {
+			t.Fatal("Startable = true, want false for a builtin-only Claude row")
+		}
+		if reason != StartBlockedLiveDiscoveryUnavailable {
+			t.Fatalf("StartBlockedReason = %q, want %q", reason, StartBlockedLiveDiscoveryUnavailable)
+		}
+	})
+
+	t.Run("Should block a live-binding provider model whose live source is stale", func(t *testing.T) {
+		t.Parallel()
+
+		available := true
+		models := mergeTestRows([]ModelRow{
+			testRow(
+				"provider_live:claude",
+				SourceKindProviderLive,
+				PriorityProviderLive,
+				"claude",
+				"claude-sonnet-5",
+				testTime(0),
+				func(row *ModelRow) {
+					row.Available = &available
+					row.Stale = true
+					row.TransportBindings = []ModelTransportBinding{{TransportModelID: "sonnet"}}
+				},
+			),
+		})
+
+		model := requireSingleModel(t, models)
+		startable, reason := ModelStartability(model)
+		if startable {
+			t.Fatal("Startable = true, want false for a stale live source")
+		}
+		if reason != StartBlockedLiveDiscoveryStale {
+			t.Fatalf("StartBlockedReason = %q, want %q", reason, StartBlockedLiveDiscoveryStale)
+		}
+	})
+
+	t.Run("Should block a live-binding provider model without a transport binding", func(t *testing.T) {
+		t.Parallel()
+
+		available := true
+		models := mergeTestRows([]ModelRow{
+			testRow(
+				"provider_live:claude",
+				SourceKindProviderLive,
+				PriorityProviderLive,
+				"claude",
+				"claude-sonnet-5",
+				testTime(0),
+				func(row *ModelRow) { row.Available = &available },
+			),
+		})
+
+		model := requireSingleModel(t, models)
+		startable, reason := ModelStartability(model)
+		if startable {
+			t.Fatal("Startable = true, want false without a transport binding")
+		}
+		if reason != StartBlockedNotAdvertised {
+			t.Fatalf("StartBlockedReason = %q, want %q", reason, StartBlockedNotAdvertised)
+		}
+	})
+
+	t.Run("Should allow a live-binding provider model with a fresh binding", func(t *testing.T) {
+		t.Parallel()
+
+		available := true
+		models := mergeTestRows([]ModelRow{
+			testRow(
+				"provider_live:claude",
+				SourceKindProviderLive,
+				PriorityProviderLive,
+				"claude",
+				"claude-sonnet-5",
+				testTime(0),
+				func(row *ModelRow) {
+					row.Available = &available
+					row.TransportBindings = []ModelTransportBinding{{TransportModelID: "sonnet"}}
+				},
+			),
+		})
+
+		model := requireSingleModel(t, models)
+		startable, reason := ModelStartability(model)
+		if !startable {
+			t.Fatalf("Startable = false, want true; blocked by %q", reason)
+		}
+		if reason != "" {
+			t.Fatalf("StartBlockedReason = %q, want empty", reason)
+		}
+	})
+
+	t.Run("Should allow an offline model for a provider that needs no live binding", func(t *testing.T) {
+		t.Parallel()
+
+		models := mergeTestRows([]ModelRow{
+			testRow("models_dev", SourceKindModelsDev, PriorityModelsDev, "openai", "gpt-5.4", testTime(0), nil),
+		})
+
+		model := requireSingleModel(t, models)
+		if model.AvailabilityState != AvailabilityStateUnknown {
+			t.Fatalf("AvailabilityState = %q, want %q", model.AvailabilityState, AvailabilityStateUnknown)
+		}
+		if startable, reason := ModelStartability(model); !startable {
+			t.Fatalf("Startable = false, want true; blocked by %q", reason)
+		}
+	})
+
+	t.Run("Should block an unconfirmed offline model for every native-CLI live-binding provider", func(t *testing.T) {
+		t.Parallel()
+
+		for _, providerID := range []string{"codex", "opencode", "hermes", "pi"} {
+			t.Run(providerID, func(t *testing.T) {
+				t.Parallel()
+
+				models := mergeTestRows([]ModelRow{
+					testRow(
+						"builtin",
+						SourceKindBuiltin,
+						PriorityBuiltin,
+						providerID,
+						"placeholder-model",
+						testTime(0),
+						nil,
+					),
+				})
+
+				model := requireSingleModel(t, models)
+				if startable, reason := ModelStartability(model); startable {
+					t.Fatalf("Startable = true, want false for a builtin-only %q row", providerID)
+				} else if reason != StartBlockedLiveDiscoveryUnavailable {
+					t.Fatalf("StartBlockedReason = %q, want %q", reason, StartBlockedLiveDiscoveryUnavailable)
+				}
+			})
+		}
+	})
+
+	t.Run("Should allow a live-confirmed Codex model with no transport binding", func(t *testing.T) {
+		t.Parallel()
+
+		// The generic ACP row builder never populates TransportBindings: a provider whose
+		// model id already IS its transport id (Codex, OpenCode, Hermes, Pi) needs only a
+		// fresh live source, never a binding, to become startable.
+		available := true
+		models := mergeTestRows([]ModelRow{
+			testRow(
+				"provider_live:codex",
+				SourceKindProviderLive,
+				PriorityProviderLive,
+				"codex",
+				"gpt-5.6-sol",
+				testTime(0),
+				func(row *ModelRow) { row.Available = &available },
+			),
+		})
+
+		model := requireSingleModel(t, models)
+		if len(model.TransportBindings) != 0 {
+			t.Fatalf("TransportBindings = %#v, want none for this case", model.TransportBindings)
+		}
+		if startable, reason := ModelStartability(model); !startable {
+			t.Fatalf("Startable = false, want true; blocked by %q", reason)
+		}
+	})
+
+	t.Run("Should allow an OpenCode model once its own live source confirms it", func(t *testing.T) {
+		t.Parallel()
+
+		available := true
+		models := mergeTestRows([]ModelRow{
+			testRow(
+				"provider_live:opencode",
+				SourceKindProviderLive,
+				PriorityProviderLive,
+				"opencode",
+				"opencode/big-pickle",
+				testTime(0),
+				func(row *ModelRow) { row.Available = &available },
+			),
+		})
+
+		model := requireSingleModel(t, models)
+		if startable, reason := ModelStartability(model); !startable {
+			t.Fatalf("Startable = false, want true; blocked by %q", reason)
+		}
+	})
+
+	t.Run("Should block a model an availability authority reports unavailable", func(t *testing.T) {
+		t.Parallel()
+
+		unavailable := false
+		models := mergeTestRows([]ModelRow{
+			testRow(
+				"provider_live:openai",
+				SourceKindProviderLive,
+				PriorityProviderLive,
+				"openai",
+				"gpt-5.4",
+				testTime(0),
+				func(row *ModelRow) { row.Available = &unavailable },
+			),
+		})
+
+		model := requireSingleModel(t, models)
+		startable, reason := ModelStartability(model)
+		if startable {
+			t.Fatal("Startable = true, want false for an unavailable model")
+		}
+		if reason != StartBlockedUnavailable {
+			t.Fatalf("StartBlockedReason = %q, want %q", reason, StartBlockedUnavailable)
 		}
 	})
 }

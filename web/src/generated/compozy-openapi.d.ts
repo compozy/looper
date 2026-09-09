@@ -46588,6 +46588,7 @@ export interface operations {
                 reasoning_per_million?: number | null;
               } | null;
               curated: boolean;
+              default: boolean;
               /** @enum {string|null} */
               default_reasoning_effort?:
                 | "none"
@@ -46631,6 +46632,8 @@ export interface operations {
                 stale: boolean;
               }[];
               stale: boolean;
+              start_blocked_reason?: string;
+              startable: boolean;
               supports_reasoning?: boolean | null;
               supports_tools?: boolean | null;
             }[];
@@ -46993,6 +46996,7 @@ export interface operations {
                 reasoning_per_million?: number | null;
               } | null;
               curated: boolean;
+              default: boolean;
               /** @enum {string|null} */
               default_reasoning_effort?:
                 | "none"
@@ -47036,6 +47040,8 @@ export interface operations {
                 stale: boolean;
               }[];
               stale: boolean;
+              start_blocked_reason?: string;
+              startable: boolean;
               supports_reasoning?: boolean | null;
               supports_tools?: boolean | null;
             }[];
@@ -47319,6 +47325,7 @@ export interface operations {
                 reasoning_per_million?: number | null;
               } | null;
               curated: boolean;
+              default: boolean;
               /** @enum {string|null} */
               default_reasoning_effort?:
                 | "none"
@@ -47362,6 +47369,8 @@ export interface operations {
                 stale: boolean;
               }[];
               stale: boolean;
+              start_blocked_reason?: string;
+              startable: boolean;
               supports_reasoning?: boolean | null;
               supports_tools?: boolean | null;
             };
@@ -50372,6 +50381,7 @@ export interface operations {
                   /** Format: double */
                   reasoning_per_million?: number | null;
                 } | null;
+                default: boolean;
                 /** @enum {string|null} */
                 default_reasoning_effort?:
                   | "none"
