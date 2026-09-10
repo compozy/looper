@@ -228,6 +228,7 @@
 - Enable memory for the knowledge browser journey
 - Keep noncooperative ACP prompts alive after cancellation
 - Select the desktop workspace before awaiting its client
+- Wait for connected idle Skills prompt readiness
 
 ### Release Notes
 
